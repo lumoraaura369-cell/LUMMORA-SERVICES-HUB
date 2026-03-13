@@ -497,17 +497,91 @@ function enterHub() {
   else toast('Welcome ' + CU.name + '!', 'ok');
 }
 
+// ══════════ FIREBASE ══════════
+const FB_CFG = {
+  apiKey: "AIzaSyCclNzPiVibYyYWhu_Y6e9kuTLUHM8bTsg",
+  authDomain: "lummora-services-hub.firebaseapp.com",
+  projectId: "lummora-services-hub",
+  storageBucket: "lummora-services-hub.firebasestorage.app",
+  messagingSenderId: "966995480022",
+  appId: "1:966995480022:web:2805a7bd2506a812f76877"
+};
+let fbApp = null, fbDb = null, fbUnsubscribe = null;
+
+function initFirebase() {
+  try {
+    if (!firebase.apps.length) fbApp = firebase.initializeApp(FB_CFG);
+    else fbApp = firebase.apps[0];
+    fbDb = firebase.firestore();
+    return true;
+  } catch(e) { console.error('Firebase init failed', e); return false; }
+}
+
 // ══════════ SERVICES ══════════
 function getSvcIdx() { try { return JSON.parse(localStorage.getItem('lu_svcIdx') || '{}'); } catch (_) { return {}; } }
-function saveSvcIdx(svcs) { localStorage.setItem('lu_svcIdx', JSON.stringify({ v: 3, ts: Date.now(), services: svcs })); }
+function saveSvcIdxLocal(svcs) { localStorage.setItem('lu_svcIdx', JSON.stringify({ v: 3, ts: Date.now(), services: svcs })); }
+
+async function saveSvcIdx(svcs) {
+  saveSvcIdxLocal(svcs);
+  if (fbDb) {
+    try {
+      await fbDb.collection('hub').doc('services').set({ list: svcs, ts: Date.now() });
+    } catch(e) { console.warn('Firestore save failed', e); }
+  }
+}
 
 async function loadServices() {
   showSkel();
+  if (!fbDb) initFirebase();
+  if (fbDb) {
+    try {
+      // Real-time listener — auto updates when admin adds service
+      if (fbUnsubscribe) fbUnsubscribe();
+      fbUnsubscribe = fbDb.collection('hub').doc('services').onSnapshot(snap => {
+        if (snap.exists) {
+          const data = snap.data();
+          SVCS = data.list || [];
+          saveSvcIdxLocal(SVCS); // keep local backup
+        } else {
+          // First time — load from localStorage if available
+          const d = getSvcIdx();
+          SVCS = d.services || [];
+        }
+        renderGrid();
+        renderTabs();
+        warmCache();
+      }, err => {
+        console.warn('Firestore listener error, using local', err);
+        const d = getSvcIdx();
+        SVCS = d.services || [];
+        renderGrid(); renderTabs(); warmCache();
+      });
+      return;
+    } catch(e) {
+      console.warn('Firestore load failed, using local', e);
+    }
+  }
+  // Fallback to localStorage
   const d = getSvcIdx();
   SVCS = d.services || [];
-  renderGrid();
-  renderTabs();
-  warmCache();
+  renderGrid(); renderTabs(); warmCache();
+}
+
+// ══════════ MIGRATION ══════════
+async function migrateToFirebase() {
+  const d = getSvcIdx();
+  const localSvcs = d.services || [];
+  if (!localSvcs.length) { toast('No local services to migrate', 'wa'); return; }
+  if (!fbDb) { toast('Firebase not connected', 'er'); return; }
+  try {
+    toast('Migrating ' + localSvcs.length + ' services to cloud…', 'in');
+    await fbDb.collection('hub').doc('services').set({ list: localSvcs, ts: Date.now() });
+    SVCS = localSvcs;
+    toast('✅ ' + localSvcs.length + ' services migrated to Firebase!', 'ok');
+    renderGrid(); renderTabs();
+  } catch(e) {
+    toast('Migration failed: ' + e.message, 'er');
+  }
 }
 
 async function warmCache() {
@@ -792,6 +866,12 @@ function buildSettingsTab() {
   </div>
   <div class="divider"></div>
   <div class="asec">
+    <div class="asec-t">☁ Firebase Migration</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6">Tumhare local browser mein jo services hain unhe Firebase cloud par migrate karo — phir sab devices par dikhne lagengi!</div>
+    <button class="btn btn-p" onclick="migrateToFirebase()">🚀 Migrate Local Services to Firebase</button>
+  </div>
+  <div class="divider"></div>
+  <div class="asec">
     <div class="asec-t">Danger Zone</div>
     <button class="btn btn-r" onclick="clearAll()">🗑 Clear All Services & Data</button>
   </div>`;
@@ -985,7 +1065,13 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeModal(); closeAdm(); }
   if (e.key === 'Enter' && document.getElementById('authScr').style.display !== 'none' && document.getElementById('af-login').classList.contains('on')) doLogin();
 });
-window.LUMMORA_HUB = { getServices: () => SVCS, getKeys, v: '3.0', brand: 'LUMMORA ENGINEERING PROJECTS PRIVATE LIMITED' };
+window.LUMMORA_HUB = { getServices: () => SVCS, getKeys, v: '3.1', brand: 'LUMMORA ENGINEERING PROJECTS PRIVATE LIMITED' };
+</script>
+<!-- Firebase SDKs -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.23.0/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.23.0/firebase-firestore-compat.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => { initFirebase(); });
 </script>
 </body>
 </html>
